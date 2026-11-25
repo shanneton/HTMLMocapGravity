@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mocap sans marqueurs – capture et export ODS</title>
+<style>
+  :root{--bg:#0f1318;--card:#181e26;--line:#2a323d;--txt:#e6ebf1;--mut:#8b97a6;--acc:#4ade80;--red:#f87171}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:18px 24px 6px}
+  h1{margin:0;font-size:22px}
+  .sub{margin:2px 0 0;color:var(--mut);font-size:13px}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;padding:14px 24px}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .videobox{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3}
+  .videobox video,.videobox canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  #big{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:min(22vw,180px);font-weight:700;color:#fff;text-shadow:0 4px 24px #000;pointer-events:none}
+  #rec{position:absolute;top:10px;left:12px;background:#b91c1c;color:#fff;padding:3px 10px;border-radius:20px;font-weight:600;font-size:13px;animation:bl 1s infinite}
+  @keyframes bl{50%{opacity:.4}}
+  #status{margin-top:10px;color:var(--mut);min-height:22px}
+  #status.err{color:var(--red)}
+  progress{width:100%;margin-top:6px;accent-color:var(--acc)}
+  label{display:block;font-size:12px;color:var(--mut);margin:10px 0 3px}
+  select,input[type=number]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:#0f141a;color:var(--txt);font-size:14px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button{cursor:pointer;border:0;border-radius:10px;padding:11px 14px;font-size:15px;font-weight:600;background:var(--acc);color:#052e16;width:100%}
+  button.sec{background:#2a323d;color:var(--txt)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .chk{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--txt)}
+  .small{font-size:12px;color:var(--mut);margin-top:6px}
+  .btns{display:grid;gap:8px;margin-top:14px}
+  #results{margin:0 24px 30px}
+  #results canvas{width:100%;background:#0b0f14;border-radius:8px;display:block}
+  #replay{max-height:420px;object-fit:contain}
+  .exp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  @media(max-width:600px){.exp{grid-template-columns:1fr}}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  .bar{display:flex;gap:10px;align-items:center;margin:8px 0}
+  .bar button{width:auto;padding:7px 16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mocap sans marqueurs</h1>
+  <p class="sub">MediaPipe BlazePose (33 points) · capture image par image · estimation du centre de gravité · export LibreOffice (.ods)</p>
+</header>
+
+<main>
+  <section class="card">
+    <div class="videobox">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="ov"></canvas>
+      <div id="big"></div>
+      <div id="rec" hidden>● REC</div>
+    </div>
+    <div id="status">Initialisation…</div>
+    <progress id="prog" hidden max="1" value="0"></progress>
+  </section>
+
+  <aside class="card">
+    <label for="cam">Caméra</label>
+    <select id="cam"></select>
+    <div class="row">
+      <div><label for="res">Résolution</label>
+        <select id="res"><option value="640x480" selected>640 × 480</option><option value="1280x720">1280 × 720</option><option value="1920x1080">1920 × 1080</option><option value="320x240">320 × 240</option></select></div>
+      <div><label for="fps">Images/s demandées</label>
+        <select id="fps"><option value="30">30</option><option value="60" selected>60</option><option value="120">120</option></select></div>
+    </div>
+    <label for="model">Modèle de pose</label>
+    <select id="model">
+      <option value="lite">Lite (le plus rapide)</option>
+      <option value="full" selected>Full (précis, recommandé)</option>
+      <option value="heavy">Heavy (le plus précis)</option>
+    </select>
+    <div class="row">
+      <div><label for="dur">Durée (s)</label><input id="dur" type="number" min="0.1" max="30" step="0.1" value="1"></div>
+      <div><label for="cd">Décompte (s)</label><input id="cd" type="number" min="0" max="10" step="1" value="3"></div>
+    </div>
+    <div class="chk"><input id="snd" type="checkbox" checked><label for="snd" style="margin:0;color:var(--txt);font-size:14px">Décompte sonore</label></div>
+    <div class="small" id="camInfo">—</div>
+    <div class="small" id="memInfo">—</div>
+    <div class="btns">
+      <button id="go" disabled>Lancer l'enregistrement</button>
+      <button id="cancel" class="sec" hidden>Annuler</button>
+    </div>
+    <p class="small">Les images de la caméra sont d'abord toutes mémorisées avec leur horodatage de capture (sans calcul pendant l'enregistrement), puis analysées. La résolution temporelle est donc celle de la caméra, quelle que soit la vitesse du modèle.</p>
+  </aside>
+</main>
+
+<section id="results" class="card" hidden>
+  <div id="summary"></div>
+  <div class="bar"><button id="play" class="sec">▶ Lecture</button><input id="slider" type="range" min="0" max="0" value="0"><span id="tlabel" class="small" style="min-width:90px;text-align:right"></span></div>
+  <canvas id="replay"></canvas>
+  <canvas id="ts" width="1000" height="220" style="margin-top:10px"></canvas>
+  <div class="small">Bleu : x du centre de gravité (0 = gauche, 1 = droite de l'image) · Orange : hauteur du centre de gravité (0 = bas, 1 = haut de l'image) · Rouge : trajectoire.</div>
+  <div class="exp">
+    <button id="expCog">Exporter la trajectoire du centre de gravité (.ods)</button>
+    <button id="expAll" class="sec">Exporter toutes les données de capture (.ods)</button>
+  </div>
+</section>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+const $ = id => document.getElementById(id);
+const video = $('video'), ov = $('ov'), octx = ov.getContext('2d');
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MB = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/";
+const MODELS = {
+  lite:  MB + "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:  MB + "pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  heavy: MB + "pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task"
+};
+const NAMES = ["nez","oeil_int_g","oeil_g","oeil_ext_g","oeil_int_d","oeil_d","oeil_ext_d","oreille_g","oreille_d","bouche_g","bouche_d","epaule_g","epaule_d","coude_g","coude_d","poignet_g","poignet_d","auriculaire_g","auriculaire_d","index_g","index_d","pouce_g","pouce_d","hanche_g","hanche_d","genou_g","genou_d","cheville_g","cheville_d","talon_g","talon_d","orteil_g","orteil_d"];
+const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],[28,30],[30,32],[28,32],[15,17],[15,19],[15,21],[17,19],[16,18],[16,20],[16,22],[18,20],[0,2],[0,5],[2,7],[5,8],[9,10]];
+const COG_HEADERS = ['cdg_x_px','cdg_y_px','cdg_y_haut_px','cdg_x_norm','cdg_y_norm','cdg_z_rel','cdg_x_m','cdg_y_m','cdg_z_m','visibilite_moy','detecte'];
+
+// ---------- état ----------
+let landmarker = null, fileset = null, delegateUsed = '';
+let stream = null, camSettings = null;
+let state = 'idle';            // idle | armed | recording | processing | done
+let startPerf = 0, t0 = 0, durMs = 1000, curRel = 0, W0 = 640, H0 = 480;
+let frames = [];               // pendant l'enregistrement : {t, bmp(promise)}
+let run = null;                // dernier enregistrement analysé
+let lastTs = 0, tsOffset = 0, lastPrev = 0, lastT = null, dtEma = 0;
+let beepNodes = [], actx = null, uiTimer = 0, loopStarted = false;
+
+function setStatus(msg, err = false){ const s = $('status'); s.textContent = msg; s.className = err ? 'err' : ''; }
+const busy = () => state === 'armed' || state === 'recording' || state === 'processing';
+
+function updateUI(){
+  const ctl = ['cam','res','fps','model','dur','cd','snd'];
+  ctl.forEach(id => $(id).disabled = busy());
+  $('go').disabled = busy() || !stream || !landmarker;
+  $('cancel').hidden = state !== 'armed';
+  $('go').hidden = state === 'armed';
+}
+
+// ---------- modèle ----------
+async function loadModel(key){
+  setStatus('Chargement du modèle de pose…'); updateUI();
+  if (landmarker){ try{ landmarker.close(); }catch(e){} landmarker = null; }
+  try{
+    fileset = fileset || await FilesetResolver.forVisionTasks(WASM);
+    const make = delegate => PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODELS[key], delegate },
+      runningMode: 'VIDEO', numPoses: 1,
+      minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5
+    });
+    try{ landmarker = await make('GPU'); delegateUsed = 'GPU'; }
+    catch(e){ console.warn('GPU indisponible, repli CPU', e); landmarker = await make('CPU'); delegateUsed = 'CPU'; }
+    setStatus(`Modèle « ${key} » prêt (${delegateUsed}). Placez-vous face à la caméra, corps entier visible.`);
+  }catch(e){
+    console.error(e); setStatus('Échec du chargement du modèle (connexion internet requise) : ' + e.message, true);
+  }
+  updateUI();
+}
+
+// ---------- caméra ----------
+async function listCameras(currentId){
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  const sel = $('cam'); sel.innerHTML = '';
+  devs.forEach((d, i) => { const o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || ('Caméra ' + (i + 1)); sel.appendChild(o); });
+  if (currentId) sel.value = currentId;
+}
+function stopStream(){ if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; } }
+
+async function startCamera(){
+  stopStream(); updateUI();
+  const [w, h] = $('res').value.split('x').map(Number);
+  const c = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: +$('fps').value } };
+  if ($('cam').value) c.deviceId = { exact: $('cam').value };
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video: c, audio: false });
+  }catch(e){ setStatus('Caméra inaccessible : ' + e.message, true); updateUI(); return; }
+  video.srcObject = stream;
+  try{ await video.play(); }catch(e){}
+  const track = stream.getVideoTracks()[0];
+  camSettings = track.getSettings();
+  await listCameras(camSettings.deviceId);
+  dtEma = 0; lastT = null;
+  if (!loopStarted){ loopStarted = true; video.requestVideoFrameCallback(onFrame); }
+  updateInfo(); updateUI();
+}
+function measuredFps(){ return dtEma ? 1000 / dtEma : (camSettings && camSettings.frameRate) || 30; }
+function updateInfo(){
+  if (!camSettings) return;
+  const w = video.videoWidth || camSettings.width, h = video.videoHeight || camSettings.height;
+  $('camInfo').textContent = `Flux : ${w}×${h} · ${measuredFps().toFixed(1)} images/s mesurées`;
+  const dur = Math.max(0.1, parseFloat($('dur').value) || 1);
+  const n = Math.ceil(dur * measuredFps()), mb = n * w * h * 4 / 1048576;
+  $('memInfo').textContent = `≈ ${n} images · ≈ ${mb.toFixed(0)} Mo en mémoire pendant l'enregistrement`;
+  $('memInfo').style.color = mb > 1500 ? 'var(--red)' : '';
+  return mb;
+}
+setInterval(() => { if (stream) updateInfo(); }, 700);
+
+// ---------- horodatage / pose ----------
+function previewTs(now){ const ts = Math.max(Math.round(now + tsOffset), lastTs + 1); lastTs = ts; return ts; }
+
+function pack(res){
+  const L = res.landmarks && res.landmarks[0]; if (!L) return null;
+  const Wd = res.worldLandmarks && res.worldLandmarks[0];
+  const lm = new Float32Array(132), wl = new Float32Array(99);
+  for (let i = 0; i < 33; i++){
+    lm[i*4] = L[i].x; lm[i*4+1] = L[i].y; lm[i*4+2] = L[i].z; lm[i*4+3] = L[i].visibility ?? 1;
+    if (Wd){ wl[i*3] = Wd[i].x; wl[i*3+1] = Wd[i].y; wl[i*3+2] = Wd[i].z; }
+  }
+  return { lm, wl };
+}
+
+// Centre de gravité : modèle segmentaire de Dempster (fractions de masse et position du centre de masse de chaque segment)
+function cogOf(a, s){
+  const p = i => [a[i*s], a[i*s+1], a[i*s+2]];
+  const mid = (u, v) => u.map((x, k) => (x + v[k]) / 2);
+  const lerp = (u, v, f) => u.map((x, k) => x + (v[k] - x) * f);
+  const avg3 = (u, v, w) => u.map((x, k) => (x + v[k] + w[k]) / 3);
+  const parts = [
+    [0.081, mid(p(7), p(8))],                                          // tête (milieu des oreilles)
+    [0.497, lerp(mid(p(11), p(12)), mid(p(23), p(24)), 0.5)]           // tronc
+  ];
+  for (const k of [0, 1]){                                             // 0 = gauche, 1 = droite
+    const sh = p(11+k), el = p(13+k), wr = p(15+k), hand = avg3(p(17+k), p(19+k), p(21+k));
+    const hip = p(23+k), kn = p(25+k), an = p(27+k), he = p(29+k), to = p(31+k);
+    parts.push([0.028, lerp(sh, el, 0.436)], [0.016, lerp(el, wr, 0.430)], [0.006, lerp(wr, hand, 0.5)],
+               [0.100, lerp(hip, kn, 0.433)], [0.0465, lerp(kn, an, 0.433)], [0.0145, lerp(he, to, 0.429)]);
+  }
+  const c = [0, 0, 0];
+  for (const [m, q] of parts){ c[0] += m*q[0]; c[1] += m*q[1]; c[2] += m*q[2]; }
+  return c;                                                            // somme des masses = 1
+}
+function fullCog(p, W, H){
+  const c = cogOf(p.lm, 4), w = cogOf(p.wl, 3);
+  let v = 0; for (let i = 0; i < 33; i++) v += p.lm[i*4+3];
+  return [c[0]*W, c[1]*H, H - c[1]*H, c[0], c[1], c[2], w[0], w[1], w[2], v/33, 1];
+}
+
+// ---------- dessin ----------
+function drawPose(c, lm, w, h, cogN){
+  c.lineWidth = Math.max(2, w / 320); c.strokeStyle = '#4ade80';
+  c.beginPath();
+  for (const [a, b] of BONES){
+    if (lm[a*4+3] < 0.3 || lm[b*4+3] < 0.3) continue;
+    c.moveTo(lm[a*4]*w, lm[a*4+1]*h); c.lineTo(lm[b*4]*w, lm[b*4+1]*h);
+  }
+  c.stroke();
+  c.fillStyle = '#fff';
+  const r = Math.max(2.5, w / 220);
+  for (let i = 0; i < 33; i++){
+    if (lm[i*4+3] < 0.3) continue;
+    c.beginPath(); c.arc(lm[i*4]*w, lm[i*4+1]*h, r, 0, 6.2832); c.fill();
+  }
+  if (cogN){
+    const x = cogN[0]*w, y = cogN[1]*h, R = r * 3;
+    c.strokeStyle = '#f87171'; c.lineWidth = Math.max(2, w / 260);
+    c.beginPath(); c.arc(x, y, R, 0, 6.2832); c.moveTo(x-R*1.6, y); c.lineTo(x+R*1.6, y); c.moveTo(x, y-R*1.6); c.lineTo(x, y+R*1.6); c.stroke();
+  }
+}
+function clearOverlay(){ octx.clearRect(0, 0, ov.width, ov.height); }
+
+// ---------- boucle image par image ----------
+function onFrame(now, meta){
+  video.requestVideoFrameCallback(onFrame);
+  const t = (meta && meta.captureTime != null) ? meta.captureTime : now;   // heure réelle de capture si disponible
+  if (lastT !== null){ const dt = t - lastT; if (dt > 0 && dt < 500) dtEma = dtEma ? dtEma * 0.9 + dt * 0.1 : dt; }
+  lastT = t;
+
+  if (state === 'armed' && t >= startPerf){
+    state = 'recording'; t0 = t; frames = []; curRel = 0;
+    W0 = video.videoWidth; H0 = video.videoHeight;
+    $('rec').hidden = false; clearOverlay(); $('big').textContent = '';
+  }
+  if (state === 'recording'){
+    const rel = t - t0; curRel = rel;
+    if (rel >= durMs) finishRecording();
+    else frames.push({ t: rel, bmp: createImageBitmap(video).catch(() => null) });  // instantané de l'image, sans inférence
+    return;
+  }
+  // aperçu (squelette en direct) hors enregistrement
+  const previewOk = state === 'idle' || state === 'done' || (state === 'armed' && startPerf - now > 400);
+  if (previewOk && landmarker && now - lastPrev > 25 && video.videoWidth){
+    lastPrev = now;
+    try{
+      const res = landmarker.detectForVideo(video, previewTs(now));
+      if (ov.width !== video.videoWidth || ov.height !== video.videoHeight){ ov.width = video.videoWidth; ov.height = video.videoHeight; }
+      clearOverlay();
+      const p = pack(res);
+      if (p) drawPose(octx, p.lm, ov.width, ov.height, cogOf(p.lm, 4));
+    }catch(e){ /* image ignorée */ }
+  }
+}
+
+// ---------- sons ----------
+function beep(freq, at, dur, vol = 0.35){
+  if (!$('snd').checked || !actx) return;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'sine'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(vol, at + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  o.connect(g).connect(actx.destination); o.start(at); o.stop(at + dur + 0.02);
+  beepNodes.push(o);
+}
+
+// ---------- déroulement ----------
+async function startRun(){
+  if (busy() || !stream || !landmarker) return;
+  const dur = parseFloat($('dur').value), cd = parseInt($('cd').value, 10);
+  if (!(dur >= 0.1 && dur <= 30)){ setStatus('Durée invalide (0,1 à 30 s).', true); return; }
+  if (!(cd >= 0 && cd <= 10)){ setStatus('Décompte invalide (0 à 10 s).', true); return; }
+  const mb = updateInfo();
+  if (mb > 2500){ setStatus('Mémoire estimée trop élevée : réduisez la durée, la résolution ou la cadence.', true); return; }
+  try{ actx = actx || new (window.AudioContext || window.webkitAudioContext)(); await actx.resume(); }catch(e){}
+  $('results').hidden = true; stopPlay();
+  durMs = dur * 1000; beepNodes = [];
+  state = 'armed'; startPerf = performance.now() + cd * 1000;
+  if (actx){
+    const base = actx.currentTime + 0.05;
+    for (let k = 0; k < cd; k++) beep(880, base + k, 0.14);
+    beep(1320, base + cd, 0.45);
+  }
+  clearInterval(uiTimer);
+  uiTimer = setInterval(() => {
+    if (state === 'armed'){
+      const rem = startPerf - performance.now();
+      $('big').textContent = rem > 0 ? Math.ceil(rem / 1000) : 'GO';
+      setStatus('Prenez la position…');
+    } else if (state === 'recording'){
+      setStatus(`Enregistrement… ${Math.min(Math.round(curRel), durMs)} / ${Math.round(durMs)} ms · ${frames.length} images`);
+    }
+  }, 50);
+  updateUI();
+}
+function cancelRun(){
+  if (state !== 'armed') return;
+  state = 'idle'; clearInterval(uiTimer); $('big').textContent = '';
+  beepNodes.forEach(o => { try{ o.stop(); }catch(e){} }); beepNodes = [];
+  setStatus('Enregistrement annulé.'); updateUI();
+}
+function finishRecording(){
+  state = 'processing'; clearInterval(uiTimer);
+  $('rec').hidden = true; $('big').textContent = '';
+  if (actx) beep(520, actx.currentTime + 0.02, 0.35);
+  updateUI();
+  analyze().catch(e => { console.error(e); state = 'idle'; setStatus('Erreur pendant l\'analyse : ' + e.message, true); $('prog').hidden = true; updateUI(); });
+}
+
+async function analyze(){
+  const prog = $('prog'); prog.hidden = false; prog.value = 0;
+  setStatus(`Préparation de ${frames.length} images…`);
+  const items = (await Promise.all(frames.map(async f => ({ t: f.t, bmp: await f.bmp })))).filter(x => x.bmp);
+  frames = [];
+  if (!items.length) throw new Error('aucune image capturée');
+  const out = [], base = lastTs + 1000;
+  const model = $('model').value;
+  for (let i = 0; i < items.length; i++){
+    const it = items[i];
+    const ts = Math.max(base + Math.round(it.t), lastTs + 1); lastTs = ts;   // temps réel de capture → filtrage cohérent
+    let p = null;
+    try{ p = pack(landmarker.detectForVideo(it.bmp, ts)); }catch(e){ console.warn(e); }
+    it.bmp.close();
+    const f = { n: i + 1, t: it.t, ok: !!p, lm: p ? p.lm : null, wl: p ? p.wl : null, cog: null };
+    if (p) f.cog = fullCog(p, W0, H0);
+    out.push(f);
+    if (i % 2 === 1){ prog.value = (i + 1) / items.length; setStatus(`Analyse de la pose… ${i + 1} / ${items.length}`); await new Promise(r => setTimeout(r, 0)); }
+  }
+  tsOffset = Math.max(tsOffset, lastTs - performance.now() + 500);
+  prog.hidden = true;
+
+  const dts = []; for (let i = 1; i < out.length; i++) dts.push(out[i].t - out[i-1].t);
+  const sorted = [...dts].sort((a, b) => a - b), med = sorted.length ? sorted[sorted.length >> 1] : 0;
+  const maxdt = dts.length ? Math.max(...dts) : 0;
+  const span = out.length > 1 ? out[out.length-1].t - out[0].t : 0;
+  run = {
+    frames: out, W: W0, H: H0, model, delegate: delegateUsed, durMs,
+    camLabel: $('cam').selectedOptions[0] ? $('cam').selectedOptions[0].textContent : '',
+    fps: span > 0 ? 1000 * (out.length - 1) / span : 0, medDt: med, maxDt: maxdt,
+    detected: out.filter(f => f.ok).length, date: new Date()
+  };
+  state = 'done'; updateUI(); showResults();
+}
+
+// ---------- résultats ----------
+let playRaf = 0;
+function stopPlay(){ if (playRaf){ cancelAnimationFrame(playRaf); playRaf = 0; $('play').textContent = '▶ Lecture'; } }
+
+function showResults(){
+  const r = run, n = r.frames.length;
+  const warn = r.medDt && r.maxDt > r.medDt * 1.6 ? ` ⚠ intervalle max ${r.maxDt.toFixed(1)} ms (images possiblement manquantes)` : '';
+  $('summary').innerHTML = `<b>${n} images</b> · fréquence moyenne <b>${r.fps.toFixed(1)} Hz</b> (Δt médian ${r.medDt.toFixed(2)} ms) · pose détectée sur <b>${(100 * r.detected / n).toFixed(0)} %</b> des images · ${r.W}×${r.H}${warn}`;
+  const rp = $('replay'); rp.width = r.W; rp.height = r.H;
+  const sl = $('slider'); sl.max = n - 1; sl.value = 0;
+  $('results').hidden = false;
+  setStatus('Enregistrement terminé. Vous pouvez rejouer et exporter.');
+  drawReplay(0);
+}
+
+function drawReplay(idx){
+  const r = run, fs = r.frames, W = r.W, H = r.H;
+  const c = $('replay').getContext('2d');
+  c.fillStyle = '#0b0f14'; c.fillRect(0, 0, W, H);
+  // trajectoire du CDG
+  c.strokeStyle = '#f87171'; c.lineWidth = Math.max(2, W / 320); c.beginPath();
+  let first = true;
+  for (let i = 0; i <= idx; i++){ const f = fs[i]; if (!f.ok) continue; const x = f.cog[3]*W, y = f.cog[4]*H; if (first){ c.moveTo(x, y); first = false; } else c.lineTo(x, y); }
+  c.stroke();
+  const f = fs[idx];
+  if (f.ok) drawPose(c, f.lm, W, H, [f.cog[3], f.cog[4]]);
+  $('tlabel').textContent = `#${f.n} · ${f.t.toFixed(1)} ms`;
+  drawSeries(idx);
+}
+function drawSeries(idx){
+  const r = run, fs = r.frames, cv = $('ts'), c = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 26;
+  c.fillStyle = '#0b0f14'; c.fillRect(0, 0, W, H);
+  const tmax = Math.max(1, fs[fs.length - 1].t);
+  const X = t => pad + (W - 2*pad) * t / tmax, Y = v => H - pad - (H - 2*pad) * Math.min(1, Math.max(0, v));
+  c.strokeStyle = '#2a323d'; c.lineWidth = 1; c.fillStyle = '#8b97a6'; c.font = '12px system-ui';
+  for (let k = 0; k <= 4; k++){ const y = Y(k / 4); c.beginPath(); c.moveTo(pad, y); c.lineTo(W - pad, y); c.stroke(); c.fillText((k / 4).toFixed(2), 2, y + 4); }
+  c.fillText('0 ms', pad, H - 8); c.fillText(tmax.toFixed(0) + ' ms', W - pad - 50, H - 8);
+  const line = (col, get) => {
+    c.strokeStyle = col; c.lineWidth = 2; c.beginPath(); let st = true;
+    for (const f of fs){ if (!f.ok){ st = true; continue; } const x = X(f.t), y = Y(get(f)); if (st){ c.moveTo(x, y); st = false; } else c.lineTo(x, y); }
+    c.stroke();
+  };
+  line('#60a5fa', f => f.cog[3]); line('#fb923c', f => 1 - f.cog[4]);
+  c.strokeStyle = '#fff'; c.lineWidth = 1; c.beginPath(); c.moveTo(X(fs[idx].t), pad / 2); c.lineTo(X(fs[idx].t), H - pad); c.stroke();
+}
+$('slider').addEventListener('input', e => { stopPlay(); if (run) drawReplay(+e.target.value); });
+$('play').addEventListener('click', () => {
+  if (!run) return;
+  if (playRaf){ stopPlay(); return; }
+  $('play').textContent = '⏸ Pause';
+  const s = performance.now(), fs = run.frames;
+  const tick = () => {
+    const el = performance.now() - s;
+    let i = fs.findIndex(f => f.t > el); const end = i < 0; if (end) i = fs.length - 1;
+    $('slider').value = i; drawReplay(i);
+    if (end){ playRaf = 0; $('play').textContent = '▶ Lecture'; return; }
+    playRaf = requestAnimationFrame(tick);
+  };
+  playRaf = requestAnimationFrame(tick);
+});
+
+// ==ODS-START==
+const crcTable = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8){ let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = crcTable[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// Archive ZIP sans compression (suffisant pour ODS ; « mimetype » doit être le premier fichier, non compressé)
+function zipStore(files){
+  const enc = new TextEncoder(), chunks = [], central = []; let offset = 0;
+  for (const f of files){
+    const nameB = enc.encode(f.name), crc = crc32(f.data), len = f.data.length;
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint16(10, 0, true); h.setUint16(12, 33, true); h.setUint32(14, crc, true); h.setUint32(18, len, true);
+    h.setUint32(22, len, true); h.setUint16(26, nameB.length, true); h.setUint16(28, 0, true);
+    chunks.push(new Uint8Array(h.buffer), nameB, f.data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint16(10, 0, true); c.setUint16(12, 0, true); c.setUint16(14, 33, true); c.setUint32(16, crc, true);
+    c.setUint32(20, len, true); c.setUint32(24, len, true); c.setUint16(28, nameB.length, true);
+    c.setUint16(30, 0, true); c.setUint16(32, 0, true); c.setUint16(34, 0, true); c.setUint16(36, 0, true);
+    c.setUint32(38, 0, true); c.setUint32(42, offset, true);
+    central.push(new Uint8Array(c.buffer), nameB);
+    offset += 30 + nameB.length + len;
+  }
+  const cdSize = central.reduce((s, a) => s + a.length, 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(4, 0, true); e.setUint16(6, 0, true);
+  e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, cdSize, true); e.setUint32(16, offset, true); e.setUint16(20, 0, true);
+  return new Blob([...chunks, ...central, new Uint8Array(e.buffer)], { type: 'application/vnd.oasis.opendocument.spreadsheet' });
+}
+function xesc(s){ return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function sheetXml(name, header, rows){
+  const out = [`<table:table table:name="${xesc(name)}">`];
+  if (header) out.push('<table:table-row>' + header.map(h => `<table:table-cell table:style-name="ceh" office:value-type="string"><text:p>${xesc(h)}</text:p></table:table-cell>`).join('') + '</table:table-row>');
+  for (const r of rows){
+    out.push('<table:table-row>' + r.map(v =>
+      v === null || v === undefined || (typeof v === 'number' && !isFinite(v)) ? '<table:table-cell/>'
+      : typeof v === 'string' ? `<table:table-cell office:value-type="string"><text:p>${xesc(v)}</text:p></table:table-cell>`
+      : `<table:table-cell office:value-type="float" office:value="${v}"/>`).join('') + '</table:table-row>');
+  }
+  out.push('</table:table>');
+  return out.join('');
+}
+function buildOds(sheets){
+  const content = '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.2">' +
+    '<office:automatic-styles><style:style style:name="ceh" style:family="table-cell"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles>' +
+    '<office:body><office:spreadsheet>' + sheets.map(s => sheetXml(s.name, s.header, s.rows)).join('') + '</office:spreadsheet></office:body></office:document-content>';
+  const manifest = '<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">' +
+    '<manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>' +
+    '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>';
+  const enc = new TextEncoder();
+  return zipStore([
+    { name: 'mimetype', data: enc.encode('application/vnd.oasis.opendocument.spreadsheet') },
+    { name: 'META-INF/manifest.xml', data: enc.encode(manifest) },
+    { name: 'content.xml', data: enc.encode(content) }
+  ]);
+}
+// ==ODS-END==
+
+const rnd = (v, d = 6) => (v === null || v === undefined) ? null : Number(v.toFixed(d));
+
+function exportOds(mode){
+  if (!run) return;
+  const r = run, fs = r.frames;
+  const cogRow = f => f.ok ? [rnd(f.cog[0], 3), rnd(f.cog[1], 3), rnd(f.cog[2], 3), rnd(f.cog[3]), rnd(f.cog[4]), rnd(f.cog[5]), rnd(f.cog[6]), rnd(f.cog[7]), rnd(f.cog[8]), rnd(f.cog[9], 4), 1]
+                              : [null, null, null, null, null, null, null, null, null, null, 0];
+  let header = ['image', 'temps_ms', ...COG_HEADERS], rows, name;
+  if (mode === 'cog'){
+    name = 'CDG';
+    rows = fs.map(f => [f.n, rnd(f.t, 3), ...cogRow(f)]);
+  } else {
+    name = 'Mocap';
+    NAMES.forEach(n => header.push(`${n}_x_norm`, `${n}_y_norm`, `${n}_z_rel`, `${n}_visib`, `${n}_X_m`, `${n}_Y_m`, `${n}_Z_m`));
+    rows = fs.map(f => {
+      const row = [f.n, rnd(f.t, 3), ...cogRow(f)];
+      for (let i = 0; i < 33; i++){
+        if (f.ok) row.push(rnd(f.lm[i*4]), rnd(f.lm[i*4+1]), rnd(f.lm[i*4+2]), rnd(f.lm[i*4+3], 4), rnd(f.wl[i*3]), rnd(f.wl[i*3+1]), rnd(f.wl[i*3+2]));
+        else row.push(null, null, null, null, null, null, null);
+      }
+      return row;
+    });
+  }
+  const info = [
+    ['Date', r.date.toLocaleString('fr-FR')],
+    ['Caméra', r.camLabel],
+    ['Résolution (px)', `${r.W} x ${r.H}`],
+    ['Images', fs.length],
+    ['Fréquence moyenne (Hz)', rnd(r.fps, 3)],
+    ['Durée demandée (ms)', r.durMs],
+    ['Modèle', `MediaPipe BlazePose ${r.model} (${r.delegate})`],
+    ['Numéro d\'image', 'commence à 1'],
+    ['temps_ms', 'temps de capture de l\'image, 0 = première image enregistrée'],
+    ['Coordonnées _norm', 'normalisées dans l\'image : x de 0 (gauche) à 1 (droite), y de 0 (haut) à 1 (bas) ; z relatif (profondeur, échelle de x, origine au milieu des hanches)'],
+    ['Coordonnées _m (X,Y,Z)', 'mètres, origine au milieu des hanches (repère « monde » de MediaPipe)'],
+    ['cdg_*_px', 'position du centre de gravité en pixels ; cdg_y_haut_px = hauteur depuis le bas de l\'image'],
+    ['cdg_*_m', 'centre de gravité relatif au milieu des hanches (mètres)'],
+    ['Estimation du CDG', 'modèle segmentaire de Dempster à 14 segments appliqué aux points détectés'],
+    ['_g / _d', 'gauche / droite du sujet'],
+    ['detecte', '1 si une pose est détectée sur l\'image, 0 sinon (cellules vides)']
+  ];
+  const d = r.date, p2 = x => String(x).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p2(d.getMonth()+1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+  const blob = buildOds([{ name, header, rows }, { name: 'Infos', header: ['Paramètre', 'Valeur'], rows: info }]);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `mocap_${mode === 'cog' ? 'cdg' : 'complet'}_${stamp}.ods`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// ---------- événements ----------
+$('go').addEventListener('click', startRun);
+$('cancel').addEventListener('click', cancelRun);
+$('expCog').addEventListener('click', () => exportOds('cog'));
+$('expAll').addEventListener('click', () => exportOds('all'));
+$('cam').addEventListener('change', startCamera);
+$('res').addEventListener('change', () => { $('cam').value && startCamera(); });
+$('fps').addEventListener('change', () => { $('cam').value && startCamera(); });
+$('dur').addEventListener('input', updateInfo);
+$('model').addEventListener('change', () => loadModel($('model').value));
+
+(async function init(){
+  if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype)){
+    setStatus('Navigateur non pris en charge : utilisez Chrome ou Edge récent (requestVideoFrameCallback requis).', true); return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus('Accès caméra indisponible (ouvrez la page via https:// ou localhost).', true); return;
+  }
+  await Promise.all([startCamera(), loadModel($('model').value)]);
+  updateUI();
+})();
+</script>
+</body>
+</html>
